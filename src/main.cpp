@@ -1,118 +1,118 @@
-/********************************************************************
- *  Smart‑glove hub  ‑  ESP32‑S3 + GY‑91 + 5 flex sensors
- *  – prints IMU + barometer + flex ADCs at 20 Hz
- *  – hot‑plugs the GY‑91 (re‑scans I²C every 3 s)
- *
- *  platformio.ini  →  lib_deps =
- *      asukiaaa/MPU9250_asukiaaa @ ^1.5.13
- *      adafruit/Adafruit BMP280 Library @ ^2.6.8
- ********************************************************************/
+// /********************************************************************
+//  *  GLV‑HUB firmware  –  ESP32‑S3 + GY‑91  + 5 flex sensors
+//  *  • Publishes sensor frames over BLE Nordic UART Service (NUS)
+//  *  • Frame rate: 50 Hz   (every 20 ms)
+//  *  • Packet: {"flex":[1234,…],"imu":[ax,ay,az,gx,gy,gz]}\n
+//  *
+//  *  PlatformIO:
+//  *    board      = esp32-s3-devkitc-1
+//  *    framework  = arduino
+//  *    lib_deps   =
+//  *      adafruit/Adafruit BMP280 Library@^2.6.8
+//  *      asukiaaa/MPU9250_asukiaaa@^1.5.13
+//  *      h2zero/NimBLE-Arduino@^2.2.3
+//  *      bblanchon/ArduinoJson@^7.4.1
+//  ********************************************************************/
+// #include <Wire.h>
+// #include <MPU9250_asukiaaa.h>
+// #include <Adafruit_BMP280.h>
+// #include <NimBLEDevice.h>
+// #include <ArduinoJson.h>
 
-#include <Wire.h>
-#include <MPU9250_asukiaaa.h>
-#include <Adafruit_BMP280.h>
+// /* ---------------- pin map ----------------------------------------- */
+// constexpr uint8_t SDA_PIN  = 20;
+// constexpr uint8_t SCL_PIN  = 21;
+// const uint8_t flexPin[5]   = {4, 5, 6, 7, 8};      // ADC1‑0…4
+// /* ------------------------------------------------------------------ */
 
-/* ── user‑configurable pins ───────────────────────────────────── */
-constexpr uint8_t SDA_PIN  = 20;   // I²C data
-constexpr uint8_t SCL_PIN  = 21;   // I²C clock
-constexpr uint8_t flexPin[5] = {4, 5, 6, 7, 8};  // ADC inputs
-/* ─────────────────────────────────────────────────────────────── */
+// /* ---------------- sensor objects ---------------------------------- */
+// MPU9250_asukiaaa mpu;
+// Adafruit_BMP280  bmp;
 
-MPU9250_asukiaaa mpu;
-Adafruit_BMP280  bmp;
+// /* ---------------- BLE UUIDs (Nordic UART) ------------------------- */
+// static NimBLECharacteristic* txChar = nullptr; // 6E400003‑...
+// const char* DEVICE_NAME = "GLV-HUB";
+// static bool deviceConnected = false;
 
-bool mpuOk = false, bmpOk = false;
-uint32_t lastRetry = 0;
-constexpr uint32_t RETRY_MS  = 3000;
-constexpr uint32_t PRINT_MS  = 50;     // 20 Hz
-uint32_t lastPrint = 0, bootMs = 0;
+// /* ---------------- BLE callbacks ----------------------------------- */
+// class MyServerCallbacks : public NimBLEServerCallbacks {
+//   void onConnect(NimBLEServer*)   /* no 'override' to silence mismatch */ {
+//     deviceConnected = true;
+//   }
+//   void onDisconnect(NimBLEServer*) {
+//     deviceConnected = false;
+//   }
+// };
 
-/* ─────────────────────────────────────────────────────────────── */
-void tryAttachSensors() {
-  /* ----- IMU / mag ------------------------------------------- */
-  if (!mpuOk) {
-    mpu.setWire(&Wire);
-    uint8_t id;
-    if (mpu.readId(&id) == 0) {
-      mpu.beginAccel();
-      mpu.beginGyro();
-      mpu.beginMag();
-      mpuOk = true;
-      Serial.printf("✔ MPU‑9250 found (WHO_AM_I 0x%02X)\n", id);
-    }
-  }
+// void setupBLE() {
+//   NimBLEDevice::init(DEVICE_NAME);
+//   NimBLEDevice::setSecurityAuth(false, false, false);
 
-  /* ----- BMP‑280 --------------------------------------------- */
-  if (!bmpOk) {
-    bmpOk = bmp.begin(0x76) || bmp.begin(0x77);
-    if (bmpOk) {
-      bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
-                      Adafruit_BMP280::SAMPLING_X2,
-                      Adafruit_BMP280::SAMPLING_X16,
-                      Adafruit_BMP280::FILTER_X16,
-                      Adafruit_BMP280::STANDBY_MS_500);
-      Serial.println("✔ BMP‑280 found.");
-    }
-  }
-}
-/* ─────────────────────────────────────────────────────────────── */
-void setup() {
-  Serial.begin(115200);
-  Serial.println("\n=== Smart‑glove hub (ESP32‑S3) ===");
-  Wire.begin(SDA_PIN, SCL_PIN, 100000);          // start at 100 kHz
-  analogReadResolution(12);
-  analogSetAttenuation(ADC_11db);
-  bootMs = millis();
-  tryAttachSensors();
-}
-/* ─────────────────────────────────────────────────────────────── */
-void loop() {
-  uint32_t now = millis();
+//   auto* server = NimBLEDevice::createServer();
+//   server->setCallbacks(new MyServerCallbacks());
 
-  /* ----- periodic print -------------------------------------- */
-  if (now - lastPrint >= PRINT_MS) {
-    lastPrint = now;
-    Serial.printf("[%6lu ms] ", now - bootMs);
+//   NimBLEService* nus = server->createService(
+//       "6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
 
-    /* IMU block */
-    if (mpuOk) {
-      mpu.accelUpdate();
-      mpu.gyroUpdate();
-      Serial.printf("Ax %.2f Ay %.2f Az %.2f | ",
-                    mpu.accelX(), mpu.accelY(), mpu.accelZ());
-      Serial.printf("Gx %.1f Gy %.1f Gz %.1f | ",
-                    mpu.gyroX(), mpu.gyroY(), mpu.gyroZ());
-    } else {
-      Serial.print("IMU‑WAIT | ");
-    }
+//   txChar = nus->createCharacteristic(
+//       "6E400003-B5A3-F393-E0A9-E50E24DCCA9E",
+//       NIMBLE_PROPERTY::NOTIFY);
 
-    /* Barometer block */
-    if (bmpOk) {
-      float T = bmp.readTemperature();
-      float P = bmp.readPressure() / 100.0F;
-      if (T > -40 && T < 85 && P > 300 && P < 1100) {
-        Serial.printf("T %.1fC P %.0fhPa | ", T, P);
-      } else {
-        Serial.print("BARO‑ERR | ");
-      }
-    } else {
-      Serial.print("BARO‑WAIT | ");
-    }
+//   nus->start();
+//   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+//   adv->addServiceUUID(nus->getUUID());
+//   adv->setAppearance(0x03C0);   // generic glove (optional)
+//   adv->start();
+// }
 
-    /* Flex sensors */
-    for (int i = 0; i < 5; ++i) {
-      int raw = analogRead(flexPin[i]);
-      Serial.printf("F%d %d ", i, raw);
-    }
-    Serial.println();
-  }
+// /* ---------------- helpers ----------------------------------------- */
+// void startSensors() {
+//   Wire.begin(SDA_PIN, SCL_PIN, 400000);
 
-  /* ----- retry I²C attach every 3 s --------------------------- */
-  if (now - lastRetry >= RETRY_MS) {
-    lastRetry = now;
-    if (!mpuOk || !bmpOk) {
-      Serial.println("Scanning I²C for missing sensors …");
-      tryAttachSensors();
-    }
-  }
-}
+//   mpu.setWire(&Wire);
+//   mpu.beginAccel();
+//   mpu.beginGyro();
+
+//   bmp.begin(0x76);              // not sent but keeps BMP idle current low
+//   analogReadResolution(12);
+//   analogSetAttenuation(ADC_11db);
+// }
+
+// StaticJsonDocument<256> doc;
+
+// /* ---------------- main -------------------------------------------- */
+// void setup() {
+//   Serial.begin(115200);
+//   startSensors();
+//   setupBLE();
+// }
+
+// void loop() {
+//   static uint32_t last = 0;
+//   if (millis() - last < 20) return;   // 50 Hz
+//   last = millis();
+
+//   /* ------------ read sensors ---------------- */
+//   int flex[5];
+//   for (int i = 0; i < 5; ++i) flex[i] = analogRead(flexPin[i]);
+
+//   mpu.accelUpdate();  mpu.gyroUpdate();
+
+//   /* ------------ build JSON ------------------ */
+//   doc.clear();
+//   auto fArr = doc.createNestedArray("flex");
+//   for (int v : flex) fArr.add(v);
+
+//   auto imu = doc.createNestedArray("imu");
+//   imu.add(mpu.accelX()); imu.add(mpu.accelY()); imu.add(mpu.accelZ());
+//   imu.add(mpu.gyroX());  imu.add(mpu.gyroY());  imu.add(mpu.gyroZ());
+
+//   /* ------------ transmit -------------------- */
+//   if (deviceConnected && txChar) {
+//     char buf[256];
+//     size_t n = serializeJson(doc, buf);
+//     buf[n++] = '\n';                    // newline delimiter for the phone
+//     txChar->setValue(reinterpret_cast<uint8_t*>(buf), n);
+//     txChar->notify();
+//   }
+// }
