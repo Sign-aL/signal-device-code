@@ -1,118 +1,73 @@
-// /********************************************************************
-//  *  GLV‑HUB firmware  –  ESP32‑S3 + GY‑91  + 5 flex sensors
-//  *  • Publishes sensor frames over BLE Nordic UART Service (NUS)
-//  *  • Frame rate: 50 Hz   (every 20 ms)
-//  *  • Packet: {"flex":[1234,…],"imu":[ax,ay,az,gx,gy,gz]}\n
-//  *
-//  *  PlatformIO:
-//  *    board      = esp32-s3-devkitc-1
-//  *    framework  = arduino
-//  *    lib_deps   =
-//  *      adafruit/Adafruit BMP280 Library@^2.6.8
-//  *      asukiaaa/MPU9250_asukiaaa@^1.5.13
-//  *      h2zero/NimBLE-Arduino@^2.2.3
-//  *      bblanchon/ArduinoJson@^7.4.1
-//  ********************************************************************/
-// #include <Wire.h>
-// #include <MPU9250_asukiaaa.h>
-// #include <Adafruit_BMP280.h>
-// #include <NimBLEDevice.h>
-// #include <ArduinoJson.h>
+#include <NimBLEDevice.h>
 
-// /* ---------------- pin map ----------------------------------------- */
-// constexpr uint8_t SDA_PIN  = 20;
-// constexpr uint8_t SCL_PIN  = 21;
-// const uint8_t flexPin[5]   = {4, 5, 6, 7, 8};      // ADC1‑0…4
-// /* ------------------------------------------------------------------ */
+#define SERVICE_UUID        "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+#define CHARACTERISTIC_TX   "6E400003-B5A3-F393-E0A9-E50E24DCCA9E" // Notify
 
-// /* ---------------- sensor objects ---------------------------------- */
-// MPU9250_asukiaaa mpu;
-// Adafruit_BMP280  bmp;
+NimBLECharacteristic* txCharacteristic;
 
-// /* ---------------- BLE UUIDs (Nordic UART) ------------------------- */
-// static NimBLECharacteristic* txChar = nullptr; // 6E400003‑...
-// const char* DEVICE_NAME = "GLV-HUB";
-// static bool deviceConnected = false;
+void setupBLE() {
+  NimBLEDevice::init("FakeGloveBLE");
+  NimBLEServer* server = NimBLEDevice::createServer();
+  NimBLEService* service = server->createService(SERVICE_UUID);
 
-// /* ---------------- BLE callbacks ----------------------------------- */
-// class MyServerCallbacks : public NimBLEServerCallbacks {
-//   void onConnect(NimBLEServer*)   /* no 'override' to silence mismatch */ {
-//     deviceConnected = true;
-//   }
-//   void onDisconnect(NimBLEServer*) {
-//     deviceConnected = false;
-//   }
-// };
+  txCharacteristic = service->createCharacteristic(
+    CHARACTERISTIC_TX,
+    NIMBLE_PROPERTY::NOTIFY
+  );
 
-// void setupBLE() {
-//   NimBLEDevice::init(DEVICE_NAME);
-//   NimBLEDevice::setSecurityAuth(false, false, false);
+  service->start();
+  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
+  advertising->addServiceUUID(SERVICE_UUID);
+  advertising->start();
+}
 
-//   auto* server = NimBLEDevice::createServer();
-//   server->setCallbacks(new MyServerCallbacks());
+void setup() {
+  Serial0.begin(115200);  // Use Serial for Serial Monitor
+  setupBLE();
+  Serial0.println("🧤 Spelling Simulation Started!");
+}
 
-//   NimBLEService* nus = server->createService(
-//       "6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
+// Simulated letter list to spell out: I M H U N G R Y (with apostrophe and space)
+char letters[] = { 'I', 'M', ' ', 'H', 'U', 'N', 'G', 'R', 'Y' };
+int currentLetter = 0;
 
-//   txChar = nus->createCharacteristic(
-//       "6E400003-B5A3-F393-E0A9-E50E24DCCA9E",
-//       NIMBLE_PROPERTY::NOTIFY);
+void loop() {
+  // Simulate sensor values
+  int flex[5];
+  float accel[3];
+  float gyro[3];
 
-//   nus->start();
-//   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-//   adv->addServiceUUID(nus->getUUID());
-//   adv->setAppearance(0x03C0);   // generic glove (optional)
-//   adv->start();
-// }
+  for (int i = 0; i < 5; i++) {
+    flex[i] = random(600, 1600);
+  }
 
-// /* ---------------- helpers ----------------------------------------- */
-// void startSensors() {
-//   Wire.begin(SDA_PIN, SCL_PIN, 400000);
+  accel[0] = random(-100, 100) / 100.0;
+  accel[1] = random(-100, 100) / 100.0;
+  accel[2] = random(0, 110) / 100.0;
 
-//   mpu.setWire(&Wire);
-//   mpu.beginAccel();
-//   mpu.beginGyro();
+  gyro[0] = random(-50, 50) / 100.0;
+  gyro[1] = random(-50, 50) / 100.0;
+  gyro[2] = random(-50, 50) / 100.0;
 
-//   bmp.begin(0x76);              // not sent but keeps BMP idle current low
-//   analogReadResolution(12);
-//   analogSetAttenuation(ADC_11db);
-// }
+  // Select the current letter
+  char letter = letters[currentLetter];
 
-// StaticJsonDocument<256> doc;
+  // Format message
+  String message = "Flex: [" + String(flex[0]) + ", " + String(flex[1]) + ", " +
+                   String(flex[2]) + ", " + String(flex[3]) + ", " + String(flex[4]) + "]\n" +
+                   "Accel: [" + String(accel[0], 2) + ", " + String(accel[1], 2) + ", " + String(accel[2], 2) + "]\n" +
+                   "Gyro: [" + String(gyro[0], 2) + ", " + String(gyro[1], 2) + ", " + String(gyro[2], 2) + "]\n" +
+                   "Detected Letter: " + String(letter);
 
-// /* ---------------- main -------------------------------------------- */
-// void setup() {
-//   Serial.begin(115200);
-//   startSensors();
-//   setupBLE();
-// }
+  Serial0.println(message);
+  Serial0.println("----------------------------");
 
-// void loop() {
-//   static uint32_t last = 0;
-//   if (millis() - last < 20) return;   // 50 Hz
-//   last = millis();
+  // Notify via BLE
+  txCharacteristic->setValue(String(letter).c_str());
+  txCharacteristic->notify();
 
-//   /* ------------ read sensors ---------------- */
-//   int flex[5];
-//   for (int i = 0; i < 5; ++i) flex[i] = analogRead(flexPin[i]);
-
-//   mpu.accelUpdate();  mpu.gyroUpdate();
-
-//   /* ------------ build JSON ------------------ */
-//   doc.clear();
-//   auto fArr = doc.createNestedArray("flex");
-//   for (int v : flex) fArr.add(v);
-
-//   auto imu = doc.createNestedArray("imu");
-//   imu.add(mpu.accelX()); imu.add(mpu.accelY()); imu.add(mpu.accelZ());
-//   imu.add(mpu.gyroX());  imu.add(mpu.gyroY());  imu.add(mpu.gyroZ());
-
-//   /* ------------ transmit -------------------- */
-//   if (deviceConnected && txChar) {
-//     char buf[256];
-//     size_t n = serializeJson(doc, buf);
-//     buf[n++] = '\n';                    // newline delimiter for the phone
-//     txChar->setValue(reinterpret_cast<uint8_t*>(buf), n);
-//     txChar->notify();
-//   }
-// }
+  // Go to next letter in the sequence
+  currentLetter = (currentLetter + 1) % (sizeof(letters) / sizeof(char));
+  
+  delay(1500);  // Wait before next letter
+}
